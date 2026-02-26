@@ -1,0 +1,36 @@
+# OpenClaw Pro 依赖列表
+
+# 网络和异步
+aiohttp>=3.9.1
+httpx>=0.24.0
+
+# 日志配置
+python-dotenv>=1.0.1
+pyyaml>=6.0.1
+
+# 配置和验证
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# CLI 和 UI
+rich>=13.7.0
+
+# LLM 和 Token 计算
+tiktoken>=0.5.0
+openai>=1.0.0
+
+# 远程执行
+paramiko>=3.0.0   # SSH 客户端
+pywinrm>=0.4.3    # WinRM 客户端
+
+# 类型检查
+mypy>=1.8.0
+types-python-dateutil>=2.8.0
+
+# 测试框架
+pytest>=7.4.3
+pytest-asyncio>=0.23.3
+pytest-cov>=4.1.0
+
+# 性能优化
+uvloop>=0.19.0
