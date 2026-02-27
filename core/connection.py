@@ -1,24 +1,29 @@
 """
 连接管理器模块
-管理所有机器的执行器连接池
+延迟导入执行器，避免循环依赖
 """
 
 import asyncio
-from typing import Dict, Optional, List, Type
+from typing import Dict, Optional, List, TYPE_CHECKING, Any
+
 import logging
 
 from config import AgentConfig, MachineConfig
 from tools.executors.base import BaseExecutor
 from tools.executors.local import LocalExecutor
-from tools.executors.ssh import SSHExecutor
-from tools.executors.winrm import WinRMExecutor
+
+# 延迟导入 SSH/WinRM 执行器
+if TYPE_CHECKING:
+    from tools.executors.ssh import SSHExecutor
+    from tools.executors.winrm import WinRMExecutor
 
 logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
-    """连接管理器
-    统一管理本地/SSH/WinRM 执行器的连接池
+    """
+    连接管理器
+    延迟导入执行器，避免循环依赖
     """
 
     def __init__(self, config: AgentConfig):
@@ -30,13 +35,7 @@ class ConnectionManager:
         logger.info("ConnectionManager initialized")
 
     async def initialize(self) -> None:
-        """初始化所有执行器连接
-
-        连接顺序：
-        1. 本地执行器（始终可用）
-        2. SSH 执行器（如果配置）
-        3. WinRM 执行器（如果配置）
-        """
+        """初始化所有执行器连接"""
         logger.info("🔌 Initializing connection pool...")
 
         # 1. 本地执行器
@@ -54,22 +53,27 @@ class ConnectionManager:
         else:
             logger.error("❌ Failed to connect local executor")
 
-        # 2. 远程机器执行器
+        # 2. 远程机器执行器（延迟导入）
         for machine in self.config.machines:
             if machine.type == "local":
                 if machine.is_default:
                     self.default_machine = machine.name
-                continue
 
             executor = None
 
             try:
                 if machine.type == "ssh" and machine.ssh:
+                    # 延迟导入 SSH 执行器
+                    from tools.executors.ssh import SSHExecutor
+
                     executor = SSHExecutor(
                         name=machine.name,
                         config=machine.ssh.dict()
                     )
                 elif machine.type == "winrm" and machine.winrm:
+                    # 延迟导入 WinRM 执行器
+                    from tools.executors.winrm import WinRMExecutor
+
                     executor = WinRMExecutor(
                         name=machine.name,
                         config=machine.winrm.dict()
@@ -86,6 +90,9 @@ class ConnectionManager:
                     else:
                         logger.warning(f"⚠️ Failed to connect {machine.name}")
 
+            except ImportError as e:
+                logger.warning(f"⚠️ Missing dependency for {machine.type}: {e}")
+
             except Exception as e:
                 logger.error(f"❌ Failed to initialize {machine.name}: {e}")
 
@@ -93,7 +100,8 @@ class ConnectionManager:
         logger.info(f"🎉 Connection pool initialized ({len(self.executors)} executors)")
 
     def get_executor(self, machine_name: Optional[str] = None) -> BaseExecutor:
-        """获取指定机器的执行器
+        """
+        获取指定机器的执行器
 
         Args:
             machine_name: 机器名称（可选，默认使用默认机器）

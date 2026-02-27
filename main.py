@@ -6,33 +6,45 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# 添加 src 到路径
+sys.path.insert(0, str(Path(__file__).parent))
 
 from rich.console import Console
 
 from config import ConfigManager, AgentConfig
 from core.agent import Agent
+from core.connection import ConnectionManager
 from tools.builtin import register_builtin_tools
 
 
-async def interactive_mode(agent):
+async def interactive_mode(agent: Agent):
     """交互式 CLI 模式"""
-    console.print("[bold blue]🚀 OpenClaw 启动中...[/bold]\n")
+    console = Console()
+
+    console.print("[bold blue]🚀 OpenClaw Pro Starting...[/bold]\n")
 
     try:
         # 加载配置
-        config = AgentConfig()
-        
+        config_manager = ConfigManager()
+        config = config_manager.get_config()
+
+        # 创建连接管理器
+        conn_manager = ConnectionManager(config)
+        await conn_manager.initialize()
+
         # 创建并初始化 Agent
         agent = Agent(config)
-        await agent.initialize()
-
-        # 自动加载内置工具
-        register_builtin_tools()
+        await agent.initialize(conn_manager)
 
         # 显示可用信息
         console.print("[green]✅ 初始化完成！[/green]")
+        stats = agent.get_stats()
+        console.print(
+            f"[dim]当前状态:[/dim]\n"
+            f"  工具数量: {stats['tools_count']}\n"
+            f"  机器: {', '.join(stats['machines'])}\n"
+        )
         console.print("[bold blue]输入 'quit' 或 'exit' 退出[/bold blue]")
         print()
 
@@ -40,54 +52,51 @@ async def interactive_mode(agent):
         while True:
             try:
                 user_input = console.input("[bold blue]👤 You:[/bold blue] ").strip()
-                if not user_input or user_input.lower() in ['quit', 'exit', 'q', 'exit']:
-                    break
 
-                if user_input.startswith('stats'):
-                    # 显示统计
-                    stats = agent.get_stats()
-                    console.print("[dim]当前状态:[/dim]")
-                    console.print(f"迭代次数: {stats['iterations']}")
-                    console.print(f"消息数: {stats['message_count']}")
-                    console.print(f"机器: {', '.join(stats['machines'])}")
+                if not user_input:
                     continue
 
-                await agent.run(user_input)
+                if user_input.lower() in ['quit', 'exit', 'q', 'exit']:
+                    break
+
+                # 运行 Agent
+                console.print("[dim]⏳ 思考中...[/dim]")
+                response = await agent.run(user_input)
+
+                # 显示回复
+                console.print(f"[bold green]🤖 AI:[/bold green] {response}")
 
             except KeyboardInterrupt:
                 console.print("\n[yellow]⛔ 用户中断[/yellow]")
                 break
+            except Exception as e:
+                console.print(f"[bold red]❌ 错误: {e}[/bold red]")
 
     except Exception as e:
-        console.print(f"[bold red]❌ 错误: {e}[/bold red]")
-        finally:
-            # 关闭所有连接
-            if 'agent' in locals():
-                await agent.shutdown()
+        console.print(f"[bold red]❌ Critical Error: {e}[/bold red]")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # 关闭连接和 Agent
+        if 'conn_manager' in locals():
+            await conn_manager.shutdown()
+        if 'agent' in locals():
+            agent.shutdown()
 
 
 async def main():
     """主函数"""
-    console.print("[bold]🚀 OpenCl Starting...[/bold]\n")
+    console = Console()
+    console.print("[bold]🚀 OpenClaw Pro 预备启动...[/bold]\n")
 
     try:
-        # 加载配置
-        config_manager = ConfigManager(config_path="config.yaml")  # 优先从 YAML 加载
-        config = config_manager.get_config()
-
-        # 创建 Agent
-        agent = Agent(config)
-
-        # 初始化（加载配置，连接机器，注册工具）
-        await agent.initialize()
-
-        # 运行交互式模式
-        await interactive_mode(agent)
-
+        await interactive_mode(None)
     except KeyboardInterrupt:
-        console.print("\n👋 OpenClaw 停止")
+        console.print("\n👋 OpenClaw Pro Goodbye!")
     except Exception as e:
         console.print(f"❌ Critical Error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 

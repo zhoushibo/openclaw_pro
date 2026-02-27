@@ -1,13 +1,15 @@
 """
 工具注册表模块
-实现全局工具注册、动态机器枚举、错误处理
+修复循环导入问题，使用依赖注入模式
 """
 
-from typing import Dict, Type, Optional, List
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from .base import BaseTool
-from ..core.connection import ConnectionManager
 import logging
 
+# 使用 TYPE_CHECKING 避免运行时导入
+if TYPE_CHECKING:
+    from core.connection import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,63 +22,53 @@ class ToolRegistryError(Exception):
 class ToolRegistry:
     """
     全局工具注册表
-    
-    支持动态注册工具、获取工具定义、机器枚举、错误处理
+    使用依赖注入模式，避免循环导入
     """
 
     _tools: Dict[str, BaseTool] = {}
-    _connection_manager: Optional[ConnectionManager] = None
+    _connection_manager: Optional['ConnectionManager'] = None
     _initialized: bool = False
 
     @classmethod
-    def initialize(cls, connection_manager: ConnectionManager):
+    def initialize(cls, connection_manager: 'ConnectionManager') -> None:
         """
-        初始化注册表
-        必须在工具注册前调用
+        初始化注册表（依赖注入）
+
+        Args:
+            connection_manager: 连接管理器实例
         """
         cls._connection_manager = connection_manager
         cls._initialized = True
-        logger.info("✅ ToolRegistry initialized")
+
+        logger.info("✅ ToolRegistry initialized with ConnectionManager")
 
     @classmethod
-    def ensure_initialized(cls):
-        """确保已初始化"""
-        if not cls._initialized:
-            if not cls._connection_manager:
-                logger.warning("ToolRegistry not initialized, returning empty registry")
+    def is_initialized(cls) -> bool:
+        """检查是否已初始化"""
+        return cls._initialized and cls._connection_manager is not None
 
     @classmethod
-    def set_connection_manager(cls, manager: ConnectionManager):
-        """设置全局连接管理器（在 Agent 初始化时调用）"""
-        cls._connection_manager = manager
-        logger.info("✅ Connection Manager set in ToolRegistry")
-
-    @classmethod
-    def get_connection_manager(cls) -> ConnectionManager:
-        """获取全局连接管理器"""
+    def get_connection_manager(cls) -> 'ConnectionManager':
+        """获取连接管理器（延迟导入）"""
         if not cls._connection_manager:
             raise ToolRegistryError(
-                "ConnectionManager not initialized. Call initialize() first."
+                "ConnectionManager not initialized. "
+                "Call ToolRegistry.initialize() first."
             )
         return cls._connection_manager
 
     @classmethod
-    def register(cls, tool: BaseTool):
+    def register(cls, tool: BaseTool) -> None:
         """
         注册单个工具
-        
+
         Args:
             tool: 工具实例
-            
-        Raises:
-            ToolRegistryError: 如果工具名已存在
         """
         if tool.name in cls._tools:
-            logger.warning(f"Tool '{tool.name}' is already registered. Overwriting.")
+            logger.warning(f"Tool '{tool.name}' already registered. Overwriting.")
         cls._tools[tool.name] = tool
         logger.debug(f"🔧 Registered tool: {tool.name}")
-
-        return cls
 
     @classmethod
     def register_multiple(cls, tools: List[BaseTool]) -> None:
@@ -89,7 +81,7 @@ class ToolRegistry:
     def unregister(cls, name: str) -> bool:
         """
         注销工具
-        
+
         Returns:
             bool: 是否成功注销
         """
@@ -103,13 +95,13 @@ class ToolRegistry:
     def get(cls, name: str) -> BaseTool:
         """
         获取工具实例
-        
+
         Args:
             name: 工具名称
-            
+
         Returns:
             BaseTool: 工具实例
-            
+
         Raises:
             ToolRegistryError: 如果工具不存在
         """
@@ -121,7 +113,7 @@ class ToolRegistry:
         return cls._tools[name]
 
     @classmethod
-    def get_all(cls):
+    def get_all(cls) -> Dict[str, BaseTool]:
         """
         获取所有已注册工具
         """
@@ -138,29 +130,46 @@ class ToolRegistry:
     def get_all_definitions(cls) -> List[Dict[str, Any]]:
         """
         获取所有工具的 LLM Function Definition
-        Returns:
-            List[Dict]: 工具定义列表
+
+        动态更新 target 参数的 enum 值
         """
         definitions = []
 
         for tool in cls._tools.values():
-            # 简化版本：生成基础定义
-            definition = {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters
-                }
-            }
+            try:
+                definition = tool.to_definition()
+                cls._update_target_enum(definition)
+                definitions.append(definition)
+            except Exception as e:
+                logger.error(f"Failed to get definition for {tool.name}: {e}")
 
-            # TODO: 动态更新 target 参数的 enum 值
-            # cls._update_target_enum(definition)
-
-            definitions.append(definition)
-
-        logger.info(f"📋 Generated {len(definitions)} tool definitions")
         return definitions
+
+    @classmethod
+    def _update_target_enum(cls, definition: Dict[str, Any]) -> None:
+        """
+        动态更新工具定义中的 target 参数 enum 值
+        """
+        if not cls._connection_manager:
+            return
+
+        try:
+            func_def = definition.get('function', {})
+            params = func_def.get('parameters', {})
+            properties = params.get('properties', {})
+
+            if 'target' in properties:
+                machines = cls._connection_manager.list_machines()
+
+                properties['target']['enum'] = machines
+                properties['target'][
+                    'description'
+                ] = (
+                    f"目标机器名称 (可选，默认本地). Available: {', '.join(machines)}"
+                )
+
+        except Exception as e:
+            logger.debug(f"Failed to update target enum: {e}")
 
     @classmethod
     def has_tool(cls, name: str) -> bool:
@@ -170,7 +179,7 @@ class ToolRegistry:
         return name in cls._tools
 
     @classmethod
-    def clear(cls):
+    def clear(cls) -> None:
         """
         清空所有注册的工具
         """
@@ -178,7 +187,7 @@ class ToolRegistry:
         logger.info("🧹 ToolRegistry cleared")
 
     @classmethod
-    def get_tool_stats(cls) -> Dict:
+    def get_stats(cls) -> Dict[str, Any]:
         """
         获取注册表统计信息
         """
@@ -187,38 +196,20 @@ class ToolRegistry:
             "tool_names": list(cls._tools.keys()),
             "initialized": cls._initialized,
             "machines_available": cls._connection_manager.list_machines() if cls._connection_manager else []
-        } if cls._connection_manager else []
+        }
 
-    @classmethod
-    def _update_target_enum(cls, definition):
-        """
-        动态更新工具定义中的 target 参数 enum 值
-        确保 LLM 知道可用的机器列表
-        """
-        try:
-            if not cls._connection_manager:
-                return
-
-            func_def = definition.get("function", {})
-            params = func_def.get("parameters", {})
-            properties = params.get("properties", {})
-
-            # 更新 target 参数的 enum
-            if "target" in properties and cls._connection_manager:
-                machines = cls._connection_manager.list_machines()
-                if len(machines) > 0:
-                    properties["target"]["enum"] = machines
-                    properties["target"][
-                        "description": properties["target"].get("description", "")
-                    ]
-
-            definition["function"]["parameters"]["properties"] = properties
-
-        except Exception as e:
-            # 静默失败也不抛错
-            logger.debug(f"Failed to update target enum: {e}")
 
 # 全局快捷函数
-register_tool = ToolRegistry.register
-get_tool = ToolRegistry.get
-get_all_tools = ToolRegistry.get_all_definitions
+def register_tool(tool: BaseTool) -> None:
+    """快捷注册工具"""
+    ToolRegistry.register(tool)
+
+
+def get_tool(name: str) -> BaseTool:
+    """快捷获取工具"""
+    return ToolRegistry.get(name)
+
+
+def get_all_tools() -> List[Dict[str, Any]]:
+    """快捷获取所有工具定义"""
+    return ToolRegistry.get_all_definitions()
